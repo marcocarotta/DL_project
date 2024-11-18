@@ -1,0 +1,1 @@
+# you can generate this file with the command ```pip freeze > requirements.txt```

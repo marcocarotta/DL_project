@@ -1,0 +1,19 @@
+# .gitignore
+
+# Ignore Python bytecode files
+*.pyc
+__pycache__/
+
+# Ignore virtual environment directories
+venv/
+env/
+
+# Ignore downloaded dataset
+# dataset.txt
+
+# Ignore system-specific files
+.DS_Store
+
+# Ignore IDE-specific files
+.vscode/
+.idea/
