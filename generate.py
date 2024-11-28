@@ -3,7 +3,7 @@ from torch.nn import functional as F
 
 class TextGenerator:
     def __init__(self, model, dataset, block_size=100, device='cpu'):
-        self.device = torch.device(device)
+        self.device = 'cuda' if torch.cuda.is_available() and device == 'cuda' else 'cpu'
         self.model = model.to(self.device)
         self.model.eval()
         self.stoi = dataset.get_stoi()
@@ -33,6 +33,33 @@ class TextGenerator:
             input_tensor = torch.cat([input_tensor, next_char_idx], dim=1)
         
         return generated_text
+
+    def get_next_char(self, probs, p=0.9):
+        """
+        implement top p nucleus sampling.
+        we only consider the most influent chars such that the sum of their probabilities is <= p
+        """
+        # Sort probabilities and corresponding original indices 
+        sorted_probs, sorted_indices = torch.sort(probs, descending=True)
+        cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+        
+        # Create a mask for cumulative probability <= p
+        mask = cumulative_probs <= p
+        if not torch.any(mask):
+            # Ensure at least one token is considered
+            mask[0] = True
+        
+        # Select the probabilities and indices within the top-p mass
+        filtered_probs = sorted_probs[mask]
+        filtered_indices = sorted_indices[mask]
+        
+        # Normalize the filtered probabilities 
+        # Maybe i could not normalize but i didn't really understand the torch.multiomial what will output then
+        filtered_probs = filtered_probs / filtered_probs.sum()
+        
+        # Sample from the filtered distribution
+        next_char_idx = torch.multinomial(filtered_probs, num_samples=1)
+        return filtered_indices[next_char_idx]
 
     def load_model(self, model_path):
         checkpoint = torch.load(model_path, map_location=self.device)
