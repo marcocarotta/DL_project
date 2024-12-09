@@ -25,3 +25,17 @@ The method `__getitem__` takes an index and returns two torch tensor, respective
 
 TODO need to solve the problem with train and validation dataset. maybe do something like a method from the dataset made with all the text return different CharDataset with consistent stoi itos but different text samples.
 
+## model.py
+
+
+## train.py
+
+## generate.py
+
+
+
+
+
+ideas
+where to put layer norm
+pre post layer norm

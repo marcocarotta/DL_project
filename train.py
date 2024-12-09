@@ -10,10 +10,9 @@ import math
 logging.basicConfig(level=logging.INFO) 
 
 class Trainer:
-    def __init__(self, model, optimizer, loss_fn, train_loader, val_loader=None, batch_size=32, lr=1e-4, scheduler_information=None, max_epochs=10, auxiliary_loss_percentage=0.5, multitask=False):
+    def __init__(self, model, optimizer, loss_fn, train_loader, val_loader=None, lr=1e-4, scheduler_information=None, max_epochs=10, auxiliary_loss_percentage=0.5, multitask=False):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = model.to(self.device)
-        self.batch_size = batch_size
         self.lr = lr
         self.max_epochs = max_epochs
         self.auxiliary_loss_percentage = auxiliary_loss_percentage  # How much auxiliary loss impacts the total loss
@@ -22,6 +21,12 @@ class Trainer:
         
         self.optimizer = optimizer
         self.loss_fn = loss_fn
+
+        # Track loss and accuracy for plotting (we will obtain also perplexity by exponentiating the loss)
+        self.train_loss_tracking = [] 
+        self.train_accuracy_tracking = [] 
+        self.val_loss_tracking = [] 
+        self.val_accuracy_tracking = [] 
         
         # Create data loaders
         self.train_loader = train_loader
@@ -30,7 +35,6 @@ class Trainer:
         # Logger setup
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.setLevel(logging.INFO)  
-
 
     def _initialize_scheduler(self, scheduler_info = None):
         """
@@ -154,16 +158,23 @@ class Trainer:
             train_loss, train_accuracy = self._run_epoch(mode="train")
             self.logger.info(f"Epoch {epoch+1} - Train Loss: {train_loss:.4f},Perplexity {math.exp(train_loss):.4f}, Train Accuracy: {train_accuracy*100:.2f}%")
 
-            ### as of now we do not have validation data, problems in mismatch in the dataset vocabulary
-            # self.logger.info(f"Epoch {epoch+1}/{self.max_epochs} - Validating...")
-            # val_loss, val_accuracy = self._run_epoch(mode="val")
-            # self.logger.info(f"Epoch {epoch+1} - Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_accuracy*100:.2f}%")
+            self.logger.info(f"Epoch {epoch+1}/{self.max_epochs} - Validating...")
+            val_loss, val_accuracy = self._run_epoch(mode="val")
+            self.logger.info(f"Epoch {epoch+1} - Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_accuracy*100:.2f}%")
 
-            # # Step the scheduler based on validation loss
-            # self._step_scheduler(val_loss)  # If scheduler is None, this will be a no-op
+            # Save loss and accuracy for plotting
+            self.train_loss_tracking.append(train_loss)
+            self.train_accuracy_tracking.append(train_accuracy)
+            self.val_loss_tracking.append(val_loss)
+            self.val_accuracy_tracking.append(val_accuracy)
+
+            # Step the scheduler based on validation loss
+            self._step_scheduler(val_loss)  # If scheduler is None, this will be a no-op
 
             # Optionally save checkpoint after every epoch
-            self.save_checkpoint(epoch, filename=f"model_checkpoint_{epoch}.pth")        
+            self.save_checkpoint(epoch, filename=f"model_checkpoint_{epoch}.pth")
+
+        self.logger.info("Training complete.")
 
     def save_checkpoint(self, epoch, filename="model_checkpoint.pth"):
         # Save model and optimizer state to cpu to avoid device mismatch during loading
@@ -173,7 +184,13 @@ class Trainer:
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
+            'train_loss': self.train_loss_tracking,
+            'train_accuracy': self.train_accuracy_tracking,
+            'val_loss': self.val_loss_tracking,
+            'val_accuracy': self.val_accuracy_tracking
         }, filename)
+
+        self.model.to(self.device)
         self.logger.info(f"Checkpoint saved to {filename}")
 
     def load_checkpoint(self, filename="model_checkpoint.pth"):
@@ -182,10 +199,47 @@ class Trainer:
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.logger.info(f"Checkpoint loaded from {filename}")
 
+        # Load loss and accuracy tracking
+        self.train_loss_tracking = checkpoint['train_loss']
+        self.train_accuracy_tracking = checkpoint['train_accuracy']
+        self.val_loss_tracking = checkpoint['val_loss']
+        self.val_accuracy_tracking = checkpoint['val_accuracy']
 
-# Example usage:
-# Assuming `train_dataset` and `val_dataset` are already defined
-# model = CharTransformer(vocab_size=65, block_size=128, embed_dim=768, num_heads=8, num_layers=12, ff_hid_dim=3072, dropout=0.1, multitask=True)
 
-# trainer = Trainer(model, train_dataset, val_dataset, batch_size=32, lr=1e-4, max_epochs=10, auxiliary_loss_percentage=0.5, multitask=True)
-# trainer.train()  # Start training
+if __name__ == "__main__":
+    from dataset import CharDataset
+    from model import CharTransformer
+
+    with open ('data/dataset.txt', 'r') as f:
+        data = f.read()
+
+    dataset = CharDataset(data, block_size=128).preprocess()
+    # Split the data into train and validation sets
+
+    train_size = 0.8
+    overlap = 250
+    train_dataset, val_dataset = dataset.train_val_split(train_size, overlap)
+
+    # Example instantiation
+    vocab_size = 65  # Example vocabulary size for the Shakespeare dataset
+    model = CharTransformer(vocab_size, embed_dim=512, num_heads=8, num_layers=6, block_size=128)
+    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    loss_fn = nn.CrossEntropyLoss()
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+    scheduler_info = {
+        "scheduler_type": "ReduceLROnPlateau",
+        "mode": "min",
+        "factor": 0.1,
+        "patience": 10,
+        "verbose": True
+    }
+    max_epochs = 10
+    auxiliary_loss_percentage = 0.5
+    multitask = False
+
+    # Instantiate the trainer
+    trainer = Trainer(model, optimizer, loss_fn, train_loader, val_loader, scheduler_info=scheduler_info, max_epochs=max_epochs, auxiliary_loss_percentage=auxiliary_loss_percentage, multitask=multitask)
+
+    # Train the model
+    # trainer.train()

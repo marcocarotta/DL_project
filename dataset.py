@@ -95,6 +95,44 @@ class CharDataset(Dataset):
         self.update_dataset(processed_text)
         
         return self
+    
+    def train_val_split(self, train_size: float = 0.8, overlap: int = 250):
+        """
+        Split the dataset into training and validation sets.
+
+        The first `train_size` fraction of the dataset is used for training, 
+        and the remaining part is used for validation. An overlap of `2*overlap` 
+        characters is included between the two sets to ensure continuity and no cold start. (For this reason the validation data loader shuffle should be set to false)
+
+        Args:
+            train_size (float): Fraction of the dataset to use for training.
+            overlap (int): Number of characters to overlap between the two sets.
+        
+        Returns:
+            Tuple[CharDataset, CharDataset]: Training and validation datasets
+        """
+        train_data = self.text[:int(len(self.text) * train_size) + overlap]
+        val_data = self.text[int(len(self.text) * train_size) - overlap:]
+
+        train_dataset = CharDataset(train_data, self.block_size, self.noise_prob)
+        val_dataset = CharDataset(val_data, self.block_size, self.noise_prob)
+
+        # bruteforce same vocabulary and stoi and itos for the two datasets
+        # this could generate some problems if there are unbalanced characters in the two datasets
+        # if the corpus is big enough and maybe the user remove unfrequent char this should not be a problem 
+        train_dataset.chars = self.chars
+        train_dataset.stoi = self.stoi
+        train_dataset.itos = self.itos
+        train_dataset.data = [self.stoi[ch] for ch in train_dataset.text]
+        train_dataset.vocabulary_size = len(self.chars)
+
+        val_dataset.chars = self.chars
+        val_dataset.stoi = self.stoi
+        val_dataset.itos = self.itos
+        val_dataset.data = [self.stoi[ch] for ch in val_dataset.text]
+        val_dataset.vocabulary_size = len(self.chars)
+
+        return train_dataset, val_dataset
 
     def update_dataset(self, text: str):
         """
@@ -306,16 +344,17 @@ class CharDataset(Dataset):
                     if i < len(noisy_chunk) - 2:  # Ensure there is a next character
                         noisy_chunk[i], noisy_chunk[i + 1] = noisy_chunk[i + 1], noisy_chunk[i]
                     else: # If i is the last character, replace it with a random character
-                        noisy_chunk[i] = random.choice(self.chars)
+                        noisy_chunk[i] = self.stoi[random.choice(self.chars)]
 
                 elif noise_type == 1:  # Change of case
-                    if noisy_chunk[i].isalpha():  # Ensure the character is alphabetic
-                        noisy_chunk[i] = noisy_chunk[i].lower() if noisy_chunk[i].isupper() else noisy_chunk[i].upper()
-                    else: # If the character is not alphabetic, replace it with a random character
-                        noisy_chunk[i] = random.choice(self.chars)
+                    pass # not implemented
+                    # if noisy_chunk[i].isalpha():  # Ensure the character is alphabetic
+                    #     noisy_chunk[i] = noisy_chunk[i].lower() if noisy_chunk[i].isupper() else noisy_chunk[i].upper()
+                    # else: # If the character is not alphabetic, replace it with a random character
+                    #     noisy_chunk[i] = random.choice(self.chars)
                 else:  # Random substitution with a character from `self.chars`
-                    noisy_chunk[i] = random.choice(self.chars)  
-
+                    noisy_chunk[i] = self.stoi[random.choice(self.chars)] 
+ 
         return noisy_chunk
 
 if __name__ == "__main__":
@@ -334,5 +373,8 @@ if __name__ == "__main__":
 
     # Preprocess and re-analyze
     dataset.preprocess(lowercase=True, punctuation=True).dataset_analysis()
+
+    # Split the dataset into training and validation sets
+    train_dataset, val_dataset = dataset.train_val_split(train_size=0.8, overlap=250)
 
 

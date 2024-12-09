@@ -99,27 +99,34 @@ class CharTransformer(nn.Module):
         self.logger.setLevel(logging.INFO)  # Default level; users can change as needed.
         self.logger.info("Model initialized")
     
-    def forward(self, idx):
-        # idx: (B, N) where B is batch size and N is sequence length
+    def forward(self, idx, masked_positions=None):
+        """
+        Forward pass.
+        Args:
+            idx: Input indices (B, N)
+            masked_positions: Binary mask (B, N) indicating positions for auxiliary task (if multitask=True)
+        Returns:
+            logits: Main task logits (B, N, vocab_size)
+            aux_logits: Auxiliary task logits (masked positions only) (optional)
+        """
         B, N = idx.shape
-        
+
         # Token and positional embeddings
         tok_emb = self.tok_emb(idx)  # (B, N, embed_dim)
-        pos_emb = self.pos_emb[:, :N, :]  # Slice to match sequence length
-        x = self.dropout(tok_emb + pos_emb)  # Add embeddings and apply dropout
+        pos_emb = self.pos_emb[:, :N, :]  # Slice positional embeddings
+        x = self.dropout(tok_emb + pos_emb)
 
-        # Pass through all transformer blocks without the causal mask as i pass only the input sequence
+        # Transformer blocks
         for block in self.blocks:
             x = block(x)
-        
-        # Final layer normalization and output logits
+
+        # Final layer normalization
         x = self.ln_f(x)
-        logits = self.lm_head(x)  # (B, N, vocab_size)
-        
-        # Optionally return auxiliary logits for multitask learning
-        aux_logits = None
-        if self.multitask:
-            aux_logits = self.aux_head(x)  # Predict masked tokens
+        logits = self.lm_head(x)  # Main task logits (B, N, vocab_size)
+
+        # Auxiliary logits (only for masked positions)
+        if self.multitask and masked_positions is not None:
+            aux_logits = self.aux_head(x[masked_positions])  # Predict only for masked positions
             return logits, aux_logits
         else:
             return logits
