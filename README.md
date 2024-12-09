@@ -27,6 +27,7 @@ TODO need to solve the problem with train and validation dataset. maybe do somet
 
 ## model.py
 
+TODO create a google drive folder with model as they are too big for git.
 
 ## train.py
 

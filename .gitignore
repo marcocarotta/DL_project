@@ -11,6 +11,9 @@ env/
 # Ignore downloaded dataset
 # dataset.txt
 
+# Ignore models from third run as they are too big for Git
+models/third_run/
+
 # Ignore system-specific files
 .DS_Store
 
