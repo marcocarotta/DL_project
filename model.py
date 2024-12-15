@@ -8,46 +8,79 @@ import logging
 logging.basicConfig(level=logging.INFO) 
 
 class CausalSelfAttention(nn.Module):
+    """
+    Implements a multi-head causal self-attention mechanism.
+    """
     def __init__(self, embed_dim, num_heads, dropout=0.1):
+        """
+        Initializes the CausalSelfAttention module.
+
+        Args:
+            embed_dim (int): Dimension of the embedding.
+            num_heads (int): Number of attention heads.
+            dropout (float): Dropout rate.
+        """
         super().__init__()
         assert embed_dim % num_heads == 0, "Embedding size must be divisible by the number of heads"
-        
-        self.num_heads = num_heads
-        self.head_dim = embed_dim // num_heads
-        self.scale = self.head_dim ** -0.5  # Scaling factor for attention scores
-        
-        self.qkv = nn.Linear(embed_dim, 3 * embed_dim)  # Query, Key, Value projection
-        self.out_proj = nn.Linear(embed_dim, embed_dim)  # Output projection
-        self.attn_dropout = nn.Dropout(dropout)
-        self.proj_dropout = nn.Dropout(dropout)
+
+        self.num_heads = num_heads  # scalar
+        self.head_dim = embed_dim // num_heads  # scalar
+        self.scale = self.head_dim ** -0.5  # scalar
+
+        self.qkv = nn.Linear(embed_dim, 3 * embed_dim)  # (E) -> (3*E)
+        self.out_proj = nn.Linear(embed_dim, embed_dim)  # (E) -> (E)
+
+        self.attn_dropout = nn.Dropout(dropout)  # scalar
+        self.proj_dropout = nn.Dropout(dropout)  # scalar
 
     def forward(self, x):
-        B, N, E = x.shape  # Batch size, Sequence length, Embedding size
-        qkv = self.qkv(x)  # Shape: (B, N, 3*E)
-        q, k, v = qkv.chunk(3, dim=-1)  # Split into query, key, and value tensors
-        
-        # Reshape for multi-head attention
-        q = q.view(B, N, self.num_heads, self.head_dim).transpose(1, 2)  # (B, num_heads, N, head_dim)
-        k = k.view(B, N, self.num_heads, self.head_dim).transpose(1, 2)
-        v = v.view(B, N, self.num_heads, self.head_dim).transpose(1, 2)
-        
-        # Compute scaled dot-product attention
-        attn_scores = (q @ k.transpose(-2, -1)) * self.scale  # (B, num_heads, N, N)
+        """
+        Forward pass for the CausalSelfAttention module.
 
-        # Create causal mask, where the values above the diagonal are set to -inf so softmax will be equal to zero
-        mask = torch.tril(torch.ones(N, N, device=x.device)).unsqueeze(0).unsqueeze(0)  # (1, 1, N, N)
-        attn_scores = attn_scores.masked_fill(mask == 0, float('-inf'))
-        
-        attn_probs = F.softmax(attn_scores, dim=-1)  # Attention probabilities
-        attn_probs = self.attn_dropout(attn_probs)
-        
-        attn_output = (attn_probs @ v).transpose(1, 2).contiguous()  # Combine values
-        attn_output = attn_output.view(B, N, E)  # Concatenate heads
-        
-        return self.proj_dropout(self.out_proj(attn_output))  # Apply final linear layer
+        Args:
+            x (torch.Tensor): Input tensor of shape (B, N, E).
+
+        Returns:
+            torch.Tensor: Output tensor of shape (B, N, E).
+        """
+        B, N, E = x.shape  # B: batch size, N: sequence length, E: embedding size
+
+        qkv = self.qkv(x)  # (B, N, E) -> (B, N, 3*E)
+        q, k, v = qkv.chunk(3, dim=-1)  # (B, N, 3*E) -> (B, N, E) for each
+
+        q = q.view(B, N, self.num_heads, self.head_dim).transpose(1, 2)  # (B, N, E) -> (B, num_heads, N, head_dim)
+        k = k.view(B, N, self.num_heads, self.head_dim).transpose(1, 2)  # (B, N, E) -> (B, num_heads, N, head_dim)
+        v = v.view(B, N, self.num_heads, self.head_dim).transpose(1, 2)  # (B, N, E) -> (B, num_heads, N, head_dim)
+
+        attn_scores = (q @ k.transpose(-2, -1)) * self.scale  # (B, num_heads, N, head_dim) @ (B, num_heads, head_dim, N) -> (B, num_heads, N, N)
+
+        mask = torch.tril(torch.ones(N, N, device=x.device)).unsqueeze(0).unsqueeze(0)  # (N, N) -> (1, 1, N, N)
+        attn_scores = attn_scores.masked_fill(mask == 0, float('-inf'))  # (B, num_heads, N, N)
+
+        attn_probs = F.softmax(attn_scores, dim=-1)  # (B, num_heads, N, N)
+        attn_probs = self.attn_dropout(attn_probs)  # (B, num_heads, N, N)
+
+        attn_output = (attn_probs @ v).transpose(1, 2).contiguous()  # (B, num_heads, N, N) @ (B, num_heads, N, head_dim) -> (B, N, num_heads, head_dim)
+
+        attn_output = attn_output.view(B, N, E)  # (B, N, num_heads, head_dim) -> (B, N, E)
+
+        return self.proj_dropout(self.out_proj(attn_output))  # (B, N, E) -> (B, N, E)
+
 
 class TransformerBlock(nn.Module):
+    """
+    Implements a single transformer block with causal self-attention and feed-forward network.
+    """
     def __init__(self, embed_dim, num_heads, ff_hid_dim, dropout=0.1):
+        """
+        Initializes the TransformerBlock module.
+
+        Args:
+            embed_dim (int): Dimension of the embedding.
+            num_heads (int): Number of attention heads.
+            ff_hid_dim (int): Dimension of the feed-forward hidden layer.
+            dropout (float): Dropout rate.
+        """
         super().__init__()
         self.ln1 = nn.LayerNorm(embed_dim)
         self.ln2 = nn.LayerNorm(embed_dim)
@@ -60,6 +93,15 @@ class TransformerBlock(nn.Module):
         )
     
     def forward(self, x):
+        """
+        Forward pass for the TransformerBlock module.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (B, N, E).
+
+        Returns:
+            torch.Tensor: Output tensor of shape (B, N, E).
+        """
         # Causal self-attention with residual connection
         x = x + self.attn(self.ln1(x))
         # Feed-forward network with residual connection
@@ -67,7 +109,23 @@ class TransformerBlock(nn.Module):
         return x
 
 class CharTransformer(nn.Module):
+    """
+    Implements a character-level transformer model.
+    """
     def __init__(self, vocab_size, block_size, embed_dim, num_heads, num_layers, ff_hid_dim = 3072, dropout=0.1, multitask=False):
+        """
+        Initializes the CharTransformer module.
+
+        Args:
+            vocab_size (int): Size of the vocabulary.
+            block_size (int): Maximum sequence length.
+            embed_dim (int): Dimension of the embedding.
+            num_heads (int): Number of attention heads.
+            num_layers (int): Number of transformer blocks.
+            ff_hid_dim (int): Dimension of the feed-forward hidden layer.
+            dropout (float): Dropout rate.
+            multitask (bool): Whether to use multitask learning.
+        """
         super().__init__()
         # Model hyperparameters
         self.block_size = block_size # Needed for model summary
@@ -101,13 +159,15 @@ class CharTransformer(nn.Module):
     
     def forward(self, idx, masked_positions=None):
         """
-        Forward pass.
+        Forward pass for the CharTransformer module.
+
         Args:
-            idx: Input indices (B, N)
-            masked_positions: Binary mask (B, N) indicating positions for auxiliary task (if multitask=True)
+            idx (torch.Tensor): Input indices of shape (B, N).
+            masked_positions (torch.Tensor, optional): Binary mask indicating positions for auxiliary task.
+
         Returns:
-            logits: Main task logits (B, N, vocab_size)
-            aux_logits: Auxiliary task logits (masked positions only) (optional)
+            torch.Tensor: Main task logits of shape (B, N, vocab_size).
+            torch.Tensor (optional): Auxiliary task logits for masked positions.
         """
         B, N = idx.shape
 
@@ -149,14 +209,28 @@ class CharTransformer(nn.Module):
 
 class CharTransformerSummaryWrapper(nn.Module):
     """
-    Wrapper class to provide a summary method for the CharTransformer model
-    It is necessary to wrap the model in a new class to provide a summary method as the torchinfo.summary function requires a forward pass with single tensor output
+    Wrapper class to provide a summary method for the CharTransformer model.
     """
     def __init__(self, original_model):
+        """
+        Initializes the CharTransformerSummaryWrapper module.
+
+        Args:
+            original_model (CharTransformer): The original CharTransformer model.
+        """
         super(CharTransformerSummaryWrapper, self).__init__()
         self.original_model = original_model
 
     def forward(self, idx):
+        """
+        Forward pass for the CharTransformerSummaryWrapper module.
+
+        Args:
+            idx (torch.Tensor): Input indices of shape (B, N).
+
+        Returns:
+            torch.Tensor: Logits of shape (B, N, vocab_size).
+        """
         if self.original_model.multitask: 
             logits, _ = self.original_model(idx) # Unpack and return only logits
         else:
@@ -179,7 +253,7 @@ if __name__ == "__main__":
 
     # Example forward pass
     idx = torch.randint(0, vocab_size, (32, block_size))  # Random input (batch_size=32)
-    logits, _ = model(idx)  # Logits shape: (32, 128, vocab_size)
+    logits = model(idx)  # Logits shape: (32, 128, vocab_size)
 
     # Print model summary 
     model.summary()

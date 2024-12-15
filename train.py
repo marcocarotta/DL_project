@@ -1,3 +1,4 @@
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -5,28 +6,53 @@ from torch.utils.data import DataLoader
 from torch.nn import functional as F
 import logging
 import math
+from torch.utils.data import SubsetRandomSampler
+import random
+
 
 # Set up logging configuration
 logging.basicConfig(level=logging.INFO) 
 
 class Trainer:
+    """
+    Trainer class for training a PyTorch model.
+    """
     def __init__(self, model, optimizer, loss_fn, train_loader, val_loader=None, lr=1e-4, scheduler_information=None, max_epochs=10, auxiliary_loss_percentage=0.5, multitask=False):
+        """
+        Initializes the Trainer class.
+        
+        Args:
+            model (nn.Module): PyTorch model to train.
+            optimizer (torch.optim.Optimizer): Optimizer to use for training.
+            loss_fn (nn.Module): Loss function to use for training.
+            train_loader (DataLoader): DataLoader for training set.
+            val_loader (DataLoader): DataLoader for validation set.
+            lr (float): Learning rate.
+            scheduler_information (dict): Dictionary containing scheduler type and parameters.
+            max_epochs (int): Maximum number of epochs to train.
+            auxiliary_loss_percentage (float): How much auxiliary loss impacts the total loss.
+            multitask (bool): Whether the model is multitask.
+        """
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = model.to(self.device)
         self.lr = lr
         self.max_epochs = max_epochs
         self.auxiliary_loss_percentage = auxiliary_loss_percentage  # How much auxiliary loss impacts the total loss
         self.multitask = multitask
-        self._initialize_scheduler(scheduler_information)
         
         self.optimizer = optimizer
         self.loss_fn = loss_fn
+
+        self._initialize_scheduler(scheduler_information)
 
         # Track loss and accuracy for plotting (we will obtain also perplexity by exponentiating the loss)
         self.train_loss_tracking = [] 
         self.train_accuracy_tracking = [] 
         self.val_loss_tracking = [] 
         self.val_accuracy_tracking = [] 
+        self.step_train_loss_tracking = []
+        self.step_val_loss_tracking = []
+        
         
         # Create data loaders
         self.train_loader = train_loader
@@ -56,7 +82,6 @@ class Trainer:
             "mode": "min",
             "factor": 0.1,
             "patience": 10,
-            "verbose": True
         }
         """
         if scheduler_info is None:
@@ -65,7 +90,7 @@ class Trainer:
         if scheduler_info["scheduler_type"] == "StepLR":
             self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=scheduler_info["step_size"], gamma=scheduler_info["gamma"])
         elif scheduler_info["scheduler_type"] == "ReduceLROnPlateau":
-            self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode=scheduler_info["mode"], factor=scheduler_info["factor"], patience=scheduler_info["patience"], verbose=scheduler_info["verbose"])
+            self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode=scheduler_info["mode"], factor=scheduler_info["factor"], patience=scheduler_info["patience"])
         else:
             self.logger.warning("Scheduler type not recognized. No scheduler has been initialized during training, that is, learning rate will not be adjusted.")
             self.scheduler = None
@@ -143,13 +168,62 @@ class Trainer:
                 total_accuracy += accuracy
                 total_samples += 1
 
-                # Log progress
+                # tracking step by step loss, i will not be able to plot this to on the same graph
+                # as they will have different length
                 if idx % 100 == 0:  # Every 100 batches, log progress
-                    self.logger.info(f"{mode.capitalize()} Epoch Progress [{idx+1}/{len(loader)}], Loss: {running_loss/(idx+1):.4f}, Perplexity {math.exp(running_loss/(idx+1)):.4f}, Accuracy: {total_accuracy/(idx+1)*100:.2f}%")
+                    estimate_loss_for_logging = self.estimate_loss()
+                    self.step_train_loss_tracking.append(estimate_loss_for_logging['train_loss'])
+                    self.step_val_loss_tracking.append(estimate_loss_for_logging['val_loss'])
 
+                    self.logger.info(f"Epoch progress [{idx+1}/{len(loader)}],Train Loss: {estimate_loss_for_logging['train_loss']:.4f}, Train Perplexity: {estimate_loss_for_logging['train_perplexity']:.4f}, Val Loss: {estimate_loss_for_logging['val_loss']:.4f}, Val Perplexity: {estimate_loss_for_logging['val_perplexity']:.4f}")
         avg_loss = running_loss / total_samples
         avg_accuracy = total_accuracy / total_samples
         return avg_loss, avg_accuracy
+
+
+    @torch.no_grad()
+    def estimate_loss(self, eval_iters=50):
+        """
+        Estimate loss and perplexity on a random subset of the dataset. 
+        It averages the loss and perplexity over the subset.
+
+        Args:
+            eval_iters (int): Number of iterations to evaluate on.
+
+        Returns:
+            dict: Dictionary containing estimated loss and perplexity for training and validation sets.
+        """
+        out = {}
+        self.model.eval()
+    
+        for split in ['train', 'val']:
+            running_loss = 0.0
+            total_samples = 0
+    
+            # Choose the appropriate loader
+            loader = self.train_loader if split == 'train' else self.val_loader
+            
+            # Sample a subset of the dataset
+            sampler = SubsetRandomSampler(
+                random.sample(range(len(loader.dataset)), k=min(eval_iters, len(loader.dataset)))
+            )
+            subset_loader = torch.utils.data.DataLoader(
+                loader.dataset, batch_size=loader.batch_size, sampler=sampler, num_workers=4
+            )
+    
+            for input, target in subset_loader:
+                input, target = input.to(self.device), target.to(self.device)
+                aux_logits = None
+                total_loss, _ = self._compute_loss_and_accuracy(input, target, aux_logits)
+                running_loss += total_loss.item() * input.size(0)  # Account for batch size
+                total_samples += input.size(0)
+    
+            avg_loss = running_loss / total_samples
+            out[f'{split}_loss'] = avg_loss
+            out[f'{split}_perplexity'] = math.exp(avg_loss)
+    
+        self.model.train()        
+        return out
 
     def train(self):
         # Training loop
@@ -161,7 +235,7 @@ class Trainer:
             self.logger.info(f"Epoch {epoch+1}/{self.max_epochs} - Validating...")
             val_loss, val_accuracy = self._run_epoch(mode="val")
             self.logger.info(f"Epoch {epoch+1} - Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_accuracy*100:.2f}%")
-
+            
             # Save loss and accuracy for plotting
             self.train_loss_tracking.append(train_loss)
             self.train_accuracy_tracking.append(train_accuracy)
@@ -187,11 +261,14 @@ class Trainer:
             'train_loss': self.train_loss_tracking,
             'train_accuracy': self.train_accuracy_tracking,
             'val_loss': self.val_loss_tracking,
-            'val_accuracy': self.val_accuracy_tracking
+            'val_accuracy': self.val_accuracy_tracking,
+            'step_train_loss':self.step_train_loss_tracking,
+            'step_val_loss':self.step_val_loss_tracking
         }, filename)
 
         self.model.to(self.device)
         self.logger.info(f"Checkpoint saved to {filename}")
+        print(f"Checkpoint saved to {filename}")
 
     def load_checkpoint(self, filename="model_checkpoint.pth"):
         checkpoint = torch.load(filename, map_location=self.device)
@@ -205,7 +282,6 @@ class Trainer:
         self.val_loss_tracking = checkpoint['val_loss']
         self.val_accuracy_tracking = checkpoint['val_accuracy']
 
-
 if __name__ == "__main__":
     from dataset import CharDataset
     from model import CharTransformer
@@ -217,29 +293,29 @@ if __name__ == "__main__":
     # Split the data into train and validation sets
 
     train_size = 0.8
-    overlap = 250
+    overlap = 0
     train_dataset, val_dataset = dataset.train_val_split(train_size, overlap)
 
     # Example instantiation
-    vocab_size = 65  # Example vocabulary size for the Shakespeare dataset
-    model = CharTransformer(vocab_size, embed_dim=512, num_heads=8, num_layers=6, block_size=128)
+    vocab_size = dataset.vocabulary_size  # Example vocabulary size for the Shakespeare dataset
+    model = CharTransformer(vocab_size, embed_dim=32, num_heads=1, num_layers=1, ff_hid_dim= 64, block_size=128)
+    model.summary()
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
     loss_fn = nn.CrossEntropyLoss()
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=2048, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=4096, shuffle=False)
     scheduler_info = {
         "scheduler_type": "ReduceLROnPlateau",
         "mode": "min",
         "factor": 0.1,
         "patience": 10,
-        "verbose": True
     }
-    max_epochs = 10
+    max_epochs = 1
     auxiliary_loss_percentage = 0.5
     multitask = False
 
     # Instantiate the trainer
-    trainer = Trainer(model, optimizer, loss_fn, train_loader, val_loader, scheduler_info=scheduler_info, max_epochs=max_epochs, auxiliary_loss_percentage=auxiliary_loss_percentage, multitask=multitask)
+    trainer = Trainer(model, optimizer, loss_fn, train_loader, val_loader, scheduler_information=scheduler_info, max_epochs=max_epochs, auxiliary_loss_percentage=auxiliary_loss_percentage, multitask=multitask)
 
     # Train the model
-    # trainer.train()
+    trainer.train()

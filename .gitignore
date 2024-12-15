@@ -11,8 +11,6 @@ env/
 # Ignore downloaded dataset
 # dataset.txt
 
-# Ignore models from third run as they are too big for Git
-models/third_run/
 
 # Ignore system-specific files
 .DS_Store
@@ -20,3 +18,9 @@ models/third_run/
 # Ignore IDE-specific files
 .vscode/
 .idea/
+
+# Ignore models from third run as they are too big for Git
+models/third_run/
+models/validation/model_checkpoint_9_postlayernorm.pth
+models/validation/model_checkpoint_9_prelayernorm.pth
+models/last_config/model_checkpoint_1.pth

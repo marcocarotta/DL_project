@@ -9,13 +9,15 @@ def main():
     # with an overlap of more or less 2*overlap characters
     train_size = 0.8
     overlap = 250
-    train_data = data[:int(len(data)*train_size) + overlap]
-    val_data = data[int(len(data)*train_size) - overlap:]
+    # train_data = data[:int(len(data)*train_size) + overlap]
+    # val_data = data[int(len(data)*train_size) - overlap:]
 
     # check the frequency of each character in the dataset
     block_size = 128
-    train_dataset = CharDataset(train_data, block_size).preprocess()
-    val_dataset = CharDataset(val_data, block_size).preprocess()
+
+    dataset = CharDataset(data, block_size).preprocess()
+
+    train_dataset, val_dataset = dataset.train_val_split(train_size, overlap)
 
     train_dataset.dataset_analysis()
     val_dataset.dataset_analysis()
