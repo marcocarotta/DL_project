@@ -4,6 +4,8 @@ This repository contains the project for the Deep Learning course.
 
 The aim of the project is to implement a transformer-based, character-level language model (GPT-like) and train it on the Shakespeare dataset.
 
+Due to limitation of Git file dimension the trained model are stored at this link: [here](https://drive.google.com/drive/folders/1u_u87eAquOVoCSmaK108wV9FqFJMqa3A?usp=share_link).
+
 ## Pipeline
 The pipeline is the following:
 ```bash 
